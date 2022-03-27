@@ -1,8 +1,11 @@
+import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import pandas as pd
 from sklearn.model_selection import train_test_split
+import torchmetrics
+import loss_functions
 from tqdm import tqdm
 
 
@@ -89,25 +92,6 @@ class SaveMetrics:
         return self.data[idx]
 
 
-def eval_model_accuracy(net, data_iter, metric_func, device=None):
-    if device is None:
-        device = try_gpu()
-
-    if isinstance(net, torch.nn.Module):
-        net.eval()
-
-    metrics = SaveMetrics(2)
-
-    with torch.no_grad():
-        for X, y in data_iter:
-            X = X.to(device)
-            y = y.to(device)
-
-            metrics.add(metric_func(y, net(X)), y.numel())
-
-    return metrics[0] / metrics[1]
-
-
 class PlotResults:
     """Class for visualization training and validation"""
 
@@ -162,43 +146,6 @@ class PlotResults:
         self.fig.show()
 
 
-def train_recommendation_model(net, train_iter, val_iter, epochs, device=None, learning_rate=1e-4, save_optim=None):
 
-    plotter = PlotResults(x_label="epoch", y_label="RMSE loss", x_lim=[1, epochs], y_lim=[0, 2],
-                                legend=["train loss", "test loss"])
-    if device is None:
-        device = try_gpu()
-    print(f"Обучение модели на: {device}")
-    net.to(device)
-    # Pytorch Embeddings only with SGD (CPU/GPU), Adagrad (CPU)
-    optimizer = torch.optim.SGD(net.parameters(), lr=learning_rate)
-    loss = torch.nn.MSELoss()
 
-    for epoch in range(epochs):
-        metrics = SaveMetrics(2)
-        # Set gradients to train mode
-        net.train()
 
-        for i, (X, y) in enumerate(tqdm(train_iter)):
-            optimizer.zero_grad()
-            X, y = X.to(device), y.to(device)
-            user_tensor = get_id_from_tensor(X, "user")
-            item_tensor = get_id_from_tensor(X, "item")
-
-            y_pred = net(user_tensor, item_tensor)
-            l = loss(y_pred, y)
-            l.backward()
-            optimizer.step()
-
-            with torch.no_grad():
-                metrics.add(l * X.shape[0], X.shape[0])
-
-            train_loss = metrics[0] / metrics[1]
-
-        print(f"epoch: {epoch}", f"train loss: {train_loss:.3f}")
-
-    if save_optim is not None:
-        torch.save(optimizer.state_dict(), save_optim)
-        return f"Optimizer saved to {save_optim}"
-
-    return
