@@ -10,10 +10,10 @@ def bprl(positive: torch.Tensor, negative: torch.Tensor) -> torch.Tensor:
     """
 
     dist = positive - negative
-    return -F.logsigmoid(dist)
+    return -F.logsigmoid(dist).mean()
 
 
 def hinge_loss_rec(positive: torch.Tensor, negative: torch.Tensor, margin=1) -> torch.Tensor:
     """Hinge loss for recommendations"""
     dist = positive - negative
-    return torch.from_numpy(np.sum(np.maximum(margin - dist, 0)))
+    return torch.sum(torch.maximum(margin - dist, torch.Tensor([0])))

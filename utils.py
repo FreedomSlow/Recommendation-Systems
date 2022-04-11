@@ -1,13 +1,18 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, Dataset
+from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 from sklearn.model_selection import train_test_split
 import torchmetrics
 import loss_functions
 from tqdm import tqdm
 
+
+#######################################################
+#                 Utility Functions                   #
+#######################################################
 
 def try_gpu():
     """Select torch cuda device"""
@@ -29,8 +34,11 @@ def load_dataset(dataset_name):
         dataset = pd.read_csv("datasets/ml-latest-small/ratings.csv", sep=",", skiprows=0)
         dataset.columns = _names
 
+    elif dataset_name == "ml_1m":
+        dataset = pd.read_csv("datasets/ml-1m/ratings.dat", sep="::", names=_names, engine="python")
+
     else:
-        raise ValueError(f"dataset_name must be either 'ml_100k' or 'ml_small' got {dataset_name},"
+        raise ValueError(f"dataset_name must be either 'ml_100k', 'ml_small' or 'ml-1m' got {dataset_name},"
                          f" please check datasets for further explanation")
 
     # Get max of every id because they can be non-monotonous
@@ -46,20 +54,25 @@ def split_data(df, shuffle=True, train_size=None, validation_df=False):
     Validation df size is fixed to 0.15 of train df
     """
 
-    train_size = 0.15 if train_size is None else train_size
+    train_size = 0.85 if train_size is None else train_size
 
     _train_df, _test_df = train_test_split(df, shuffle=shuffle, train_size=train_size)
+    # return train_test_split(df, shuffle=shuffle, train_size=train_size)
+
     if validation_df:
-        _train_df, _val_df = train_test_split(df, shuffle=False, train_size=0.15)
+        _train_df, _val_df = train_test_split(df, shuffle=False, train_size=train_size)
         return _train_df, _val_df, _test_df
 
     return _train_df, _test_df
 
 
-def create_data_loader(df, batch_size, user_col, item_col, target_col, shuffle=True):
+def create_data_loader(df, batch_size, user_col, item_col, target_col, shuffle=True, train=False):
     """Create torch.DataLoaders where from pandas.DataFrame"""
     _X_tensor = torch.IntTensor(df[[user_col, item_col]].values)
     _y_tensor = torch.Tensor(df[target_col].values)
+    if train:
+        return _X_tensor, _y_tensor
+
     torch_dataset = TensorDataset(_X_tensor, _y_tensor)
 
     return DataLoader(torch_dataset, batch_size, shuffle=shuffle)
@@ -75,6 +88,11 @@ def get_id_from_tensor(tensor, id_name):
 
     else:
         raise ValueError(f"id_name should be one of 'user', 'item', got {id_name}")
+
+
+#######################################################
+# Visualization (Deprecated, use tensorboard instead) #
+#######################################################
 
 
 class SaveMetrics:
