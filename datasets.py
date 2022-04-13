@@ -1,18 +1,13 @@
 import torch
 from torch.utils.data import Dataset
-import utils
 import numpy as np
 import pandas as pd
-import loss_functions
-import torchmetrics
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
+import utils
 
 
 #######################################################
 #              For pairwise ranking                   #
 #######################################################
-
 class DatasetWithNegativeSampling(Dataset):
     """
     We create new Dataset class because for pairwise ranking loss, an important step is negative sampling.
@@ -21,8 +16,6 @@ class DatasetWithNegativeSampling(Dataset):
     and samples negative items randomly for each user from the candidate set of that user.
     During the training stage, the model ensures that the items that a user likes to be ranked higher
     than items he dislikes or has not interacted with.
-
-    For further explanation check https://arxiv.org/pdf/1708.05031.pdf
     """
     def __init__(self, train_df, test_df, user_col="user_id", item_col="item_id",
                  train=False, training_pairs_per_user=None, num_positive_in_test=2, k=10):
@@ -166,79 +159,93 @@ class DatasetWithNegativeSampling(Dataset):
             return user_id, item_id, is_pos
 
 
-def train_ranking_model(net, train_iter, test_iter, epochs, learning_rate=1e-4, loss=None,
-                        device=None, save_optim=None, hitrate_k=5, **kwargs):
+#######################################################
+#              For pairwise ranking                   #
+#######################################################
+class ImplicitFeedbackDataset(Dataset):
     """
-    Train pairwise ranking model using user-item interactions positive examples
-    and using unobserved items as negative examples.
-    :param net:
-    :param train_iter:
-    :param test_iter:
-    :param epochs:
-    :param learning_rate:
-    :param loss:
-    :param device:
-    :param save_optim:
-    :param kwargs:
-    :return:
+    Almost always recommendation systems are built based on implicit feedback .
+    One way to construct such data is to use items users interacted with as positive examples
+    And other items as negative. However, it does not mean that user actually likes item they interacted with,
+    Similarly it does not mean that users don't like items they didn't interact.
+
+    This Dataset can handle explicit and implicit feedback simultaneously and designed to be used in training
+    Neural networks with BCE loss https://pytorch.org/docs/stable/generated/torch.nn.BCELoss.html#torch.nn.BCELoss
+    So we normalize explicit feedback (ratings) and binarize implicit
     """
+    def __init__(self, df, user_col="user_id", item_col="item_id", target_col="rating"):
+        super(ImplicitFeedbackDataset, self).__init__()
+        self.df = df
+        self.user_col = user_col
+        self.item_col = item_col
+        self.target_col = target_col
+        self.all_users = set(self.df[self.user_col].unique())
+        self.all_items = set(self.df[self.item_col].unique())
+        # self.
 
-    writer = SummaryWriter()
+    def binarize_implicit(self, df, num_negatives):
+        interacted_items = df.groupby(self.user_col)[self.item_col].unique().to_dict()
 
-    device = utils.try_gpu() if device is None else device
-    print(f"Training model on: {device}")
-    net.to(device)
+        unseen_items = {
+            uid: np.random.choice(
+                list(self.all_items.difference(set(interacted))), num_negatives
+            )
+            for uid, interacted in interacted_items.items()
+        }
 
-    if loss is None:
-        if "margin" in kwargs:
-            _hinge_margin = kwargs["margin"]
+        # Create new df with both positive and negative items
+        new_df = pd.DataFrame({
+            self.user_col: interacted_items.keys(),
+            "pos_items": interacted_items.values(),
+            "neg_items": unseen_items.values()
+        })
+        new_df["pos_items"] = new_df["pos_items"].apply(lambda x: list(x))
+        new_df["neg_items"] = new_df["neg_items"].apply(lambda x: list(x))
+        new_df[self.item_col] = new_df["pos_items"] + new_df["neg_items"]
+        new_df["pos_flag"] = new_df["pos_items"].apply(lambda x: [True for _ in range(len(x))])
+        new_df["neg_flag"] = new_df["neg_items"].apply(lambda x: [False for _ in range(len(x))])
+        new_df[self.target_col] = new_df["pos_flag"] + new_df["neg_flag"]
+        # Drop auxiliary columns
+        new_df = new_df.drop(["pos_items", "neg_items", "pos_flag", "neg_flag"], axis=1)
+        new_df = new_df.explode([self.item_col, self.target_col])
+
+        return new_df
+
+    def normalize_explicit(self):
+        """Normalize rating values into [0; 1] from [0; max_rating]"""
+        max_rating = max(self.df[self.target_col])
+        self.df[self.target_col] = self.df[self.target_col] / max_rating
+
+    def setup(self, feedback_type="implicit", num_negatives=100, shuffle=True, train_size=None, validation_df=False):
+        # Split the data
+        if validation_df:
+            train_df, val_df, test_df = utils.split_data(self.df, shuffle, train_size, validation_df)
         else:
-            _hinge_margin = 1
-        loss = loss_functions.hinge_loss_rec
+            train_df, test_df = utils.split_data(self.df, shuffle, train_size, validation_df)
 
-    hitrate = torchmetrics.RetrievalHitRate(k=hitrate_k)
+        if feedback_type == "implicit":
+            self.binarize_implicit()
+            user_ids = train_df[self.user_col].unique()
 
-    # Pytorch Embeddings work only with SGD (CPU/GPU), Adagrad (CPU)
-    optimizer = torch.optim.SGD(net.parameters(), lr=learning_rate, **kwargs)
+            train_ = train_df.groupby(self.user_col, as_index=False)
+        elif feedback_type == "explicit":
+            self.normalize_explicit()
+        else:
+            raise ValueError(f"feedback_type should be one of 'implicit', 'explicit', got {feedback_type}")
 
-    for epoch in range(epochs):
-        # Set gradients to train mode
-        net.train()
+    def __len__(self):
+        pass
 
-        # One observation (X matrix) in case of pairwise ranking consists of user_id, positive item_id
-        # And negative item_id
-        for i, batch in enumerate(tqdm(train_iter)):
-            optimizer.zero_grad()
+    def __getitem__(self, item):
+        pass
 
-            user_id, pos_item, neg_item = batch
-            user_id = user_id.type(torch.IntTensor)
-            pos_item = pos_item.type(torch.IntTensor)
-            neg_item = neg_item.type(torch.IntTensor)
 
-            y_pred_pos = net(user_id, pos_item)
-            y_pred_neg = net(user_id, neg_item)
+if __name__ == '__main__':
+    torch.manual_seed(42)
 
-            l = loss(y_pred_pos, y_pred_neg)
-            l.backward()
-            optimizer.step()
+    dataset, users_cnt, items_cnt = utils.load_dataset("ml_small")
 
-            with torch.no_grad():
-                writer.add_scalar("train_loss", l, epoch)
-                hit_rate = 0
-                _cnt = 0
-                for test_batch in test_iter:
-                    test_user_id, test_item_id, test_target = test_batch
-                    test_user_id = test_user_id.type(torch.LongTensor)
-                    test_item_id = test_item_id.type(torch.IntTensor)
-                    test_target = test_target.type(torch.IntTensor)
-
-                    test_pred = torch.flatten(net(test_user_id, test_item_id))
-
-                    hit_rate += hitrate(test_pred, test_target, indexes=test_user_id)
-                    _cnt += 1
-
-                hit_rate = hit_rate / _cnt
-
-                writer.add_scalar("test_HitRate", hit_rate, epoch)
-
-        print(f"epoch: {epoch}", f"train loss: {l:.3f}", f"test loss: {hit_rate:.3f}")
+    im = ImplicitFeedbackDataset(dataset)
+    r = im.binarize_implicit(dataset, 5)
+    print(r)
+    print(r.shape)

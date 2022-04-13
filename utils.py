@@ -28,18 +28,18 @@ def load_dataset(dataset_name):
 
     if dataset_name == "ml_100k":
         # Set column names
-        dataset = pd.read_csv("datasets/ml-100k/u.data", sep="\t", engine="python", names=_names)
+        dataset = pd.read_csv("data/ml-100k/u.data", sep="\t", engine="python", names=_names)
 
     elif dataset_name == "ml_small":
-        dataset = pd.read_csv("datasets/ml-latest-small/ratings.csv", sep=",", skiprows=0)
+        dataset = pd.read_csv("data/ml-latest-small/ratings.csv", sep=",", skiprows=0)
         dataset.columns = _names
 
     elif dataset_name == "ml_1m":
-        dataset = pd.read_csv("datasets/ml-1m/ratings.dat", sep="::", names=_names, engine="python")
+        dataset = pd.read_csv("data/ml-1m/ratings.dat", sep="::", names=_names, engine="python")
 
     else:
         raise ValueError(f"dataset_name must be either 'ml_100k', 'ml_small' or 'ml-1m' got {dataset_name},"
-                         f" please check datasets for further explanation")
+                         f" please check data for further explanation")
 
     # Get max of every id because they can be non-monotonous
     _users_cnt = dataset["user_id"].max()

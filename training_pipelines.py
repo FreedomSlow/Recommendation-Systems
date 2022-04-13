@@ -1,8 +1,9 @@
 import torch
 from tqdm import tqdm
 import utils
-import torchmetrics
 from torch.utils.tensorboard import SummaryWriter
+import loss_functions
+import torchmetrics
 
 
 def train_recommendation_model(net, train_iter, val_iter, epochs, learning_rate=1e-4, loss=None,
@@ -79,3 +80,81 @@ def train_recommendation_model(net, train_iter, val_iter, epochs, learning_rate=
         return f"Optimizer saved to {save_optim}"
 
     return
+
+
+def train_ranking_model(net, train_iter, test_iter, epochs, learning_rate=1e-4, loss=None,
+                        device=None, save_optim=None, hitrate_k=5, **kwargs):
+    """
+    Train pairwise ranking model using user-item interactions positive examples
+    and using unobserved items as negative examples.
+    :param net:
+    :param train_iter:
+    :param test_iter:
+    :param epochs:
+    :param learning_rate:
+    :param loss:
+    :param device:
+    :param save_optim:
+    :param kwargs:
+    :return:
+    """
+
+    writer = SummaryWriter()
+
+    device = utils.try_gpu() if device is None else device
+    print(f"Training model on: {device}")
+    net.to(device)
+
+    if loss is None:
+        if "margin" in kwargs:
+            _hinge_margin = kwargs["margin"]
+        else:
+            _hinge_margin = 1
+        loss = loss_functions.hinge_loss_rec
+
+    hitrate = torchmetrics.RetrievalHitRate(k=hitrate_k)
+
+    # Pytorch Embeddings work only with SGD (CPU/GPU), Adagrad (CPU)
+    optimizer = torch.optim.SGD(net.parameters(), lr=learning_rate, **kwargs)
+
+    for epoch in range(epochs):
+        # Set gradients to train mode
+        net.train()
+
+        # One observation (X matrix) in case of pairwise ranking consists of user_id, positive item_id
+        # And negative item_id
+        for i, batch in enumerate(tqdm(train_iter)):
+            optimizer.zero_grad()
+
+            user_id, pos_item, neg_item = batch
+            user_id = user_id.type(torch.IntTensor)
+            pos_item = pos_item.type(torch.IntTensor)
+            neg_item = neg_item.type(torch.IntTensor)
+
+            y_pred_pos = net(user_id, pos_item)
+            y_pred_neg = net(user_id, neg_item)
+
+            l = loss(y_pred_pos, y_pred_neg)
+            l.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                writer.add_scalar("train_loss", l, epoch)
+                hit_rate = 0
+                _cnt = 0
+                for test_batch in test_iter:
+                    test_user_id, test_item_id, test_target = test_batch
+                    test_user_id = test_user_id.type(torch.LongTensor)
+                    test_item_id = test_item_id.type(torch.IntTensor)
+                    test_target = test_target.type(torch.IntTensor)
+
+                    test_pred = torch.flatten(net(test_user_id, test_item_id))
+
+                    hit_rate += hitrate(test_pred, test_target, indexes=test_user_id)
+                    _cnt += 1
+
+                hit_rate = hit_rate / _cnt
+
+                writer.add_scalar("test_HitRate", hit_rate, epoch)
+
+        print(f"epoch: {epoch}", f"train loss: {l:.3f}", f"test loss: {hit_rate:.3f}")
