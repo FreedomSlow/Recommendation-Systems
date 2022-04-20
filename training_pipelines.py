@@ -8,7 +8,7 @@ import torchmetrics
 
 def train_recommendation_model(net, train_iter, val_iter, epochs, learning_rate=1e-4, loss=None,
                                device=None, save_optim=None, scheduler=None, scheduler_conf=None,
-                               use_tensorboard=False, **kwargs):
+                               use_tensorboard=False, feedback_type=None, **kwargs):
 
     """
     Train simple recommendation model using user-item matrix to predict rating for all unseen items
@@ -30,6 +30,12 @@ def train_recommendation_model(net, train_iter, val_iter, epochs, learning_rate=
         device = utils.try_gpu()
     print(f"Training model on: {device}")
     net.to(device)
+
+    # For NeuMF model with implicit feedback
+    if feedback_type == "implicit":
+        for item in val_iter:
+            val_iter = item
+
     # Pytorch Embeddings work only with SGD (CPU/GPU), Adagrad (CPU)
     optimizer = torch.optim.SGD(net.parameters(), lr=learning_rate)
     if scheduler is not None:
@@ -56,7 +62,6 @@ def train_recommendation_model(net, train_iter, val_iter, epochs, learning_rate=
             optimizer.step()
 
             with torch.no_grad():
-
                 X_test, y_test = val_iter
                 X_test, y_test = X_test.to(device), y_test.to(device)
                 _test_user_tensor = utils.get_id_from_tensor(X_test, "user")

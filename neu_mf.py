@@ -1,7 +1,9 @@
+from datasets import ImplicitFeedbackDataset, SetupImplicitDataset
 import torch
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader
 from training_pipelines import train_recommendation_model
 import utils
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 class NeuMf(torch.nn.Module):
@@ -56,17 +58,14 @@ class NeuMf(torch.nn.Module):
 
 if __name__ == '__main__':
     torch.manual_seed(42)
-
-    dataset, users_cnt, items_cnt = utils.load_dataset("ml_1m")
-    train_df, test_df = utils.split_data(dataset, shuffle=True)
-
     BATCH_SIZE = 8192
-    EMBEDDING_DIM = 10
+    EMBEDDING_DIM = 20
     EPOCHS = 50
     HIDDEN_DIMS = [8, 16, 64, 32, 16, 8]
     TARGET = "rating"
     LR = 2e-2
-    # loss_function = torch.nn.BCELoss()
+    # For implicit feedback use BCELoss() and MSELoss() for explicit
+    loss_function = torch.nn.BCELoss()
     scheduler = ReduceLROnPlateau
     scheduler_conf = {
         "mode": "min",
@@ -76,12 +75,17 @@ if __name__ == '__main__':
         "verbose": True
     }
 
-    train_iter = utils.create_data_loader(train_df, batch_size=BATCH_SIZE, target_col=TARGET,
-                                          item_col="item_id", user_col="user_id")
-    test_iter = utils.create_data_loader(test_df, batch_size=BATCH_SIZE, target_col=TARGET,
-                                         item_col="item_id", user_col="user_id", train=True)
+    dataset, users_cnt, items_cnt = utils.load_dataset("ml_small")
+    setuper = SetupImplicitDataset(dataset)
+    # SetupImplicitDataset returns list of tensors: user_id-tensor, item_id-tensor and rating-tensor
+    _train_data, _test_data = setuper.setup()
+    train_tensor = ImplicitFeedbackDataset(*_train_data)
+    test_tensor = ImplicitFeedbackDataset(*_test_data)
+
+    train_iter = DataLoader(train_tensor, batch_size=BATCH_SIZE)
+    test_iter = DataLoader(test_tensor, batch_size=len(test_tensor))
 
     neu_fm = NeuMf(users_cnt, items_cnt, EMBEDDING_DIM, HIDDEN_DIMS)
 
     train_recommendation_model(neu_fm, train_iter, test_iter, EPOCHS, LR,
-                               scheduler=scheduler, scheduler_conf=scheduler_conf)
+                               scheduler=scheduler, scheduler_conf=scheduler_conf, feedback_type="implicit")

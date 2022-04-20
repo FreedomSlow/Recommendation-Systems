@@ -66,7 +66,8 @@ def split_data(df, shuffle=True, train_size=None, validation_df=False):
     return _train_df, _test_df
 
 
-def create_data_loader(df, batch_size, user_col, item_col, target_col, shuffle=True, train=False):
+def create_data_loader(df, batch_size, user_col, item_col, target_col, shuffle=True, train=False,
+                       num_workers=0):
     """Create torch.DataLoaders where from pandas.DataFrame"""
     _X_tensor = torch.IntTensor(df[[user_col, item_col]].values)
     _y_tensor = torch.Tensor(df[target_col].values)
@@ -75,7 +76,7 @@ def create_data_loader(df, batch_size, user_col, item_col, target_col, shuffle=T
 
     torch_dataset = TensorDataset(_X_tensor, _y_tensor)
 
-    return DataLoader(torch_dataset, batch_size, shuffle=shuffle)
+    return DataLoader(torch_dataset, batch_size, shuffle=shuffle, num_workers=num_workers)
 
 
 def get_id_from_tensor(tensor, id_name):
@@ -88,6 +89,31 @@ def get_id_from_tensor(tensor, id_name):
 
     else:
         raise ValueError(f"id_name should be one of 'user', 'item', got {id_name}")
+
+
+def torch_from_pandas(df: pd.DataFrame, cols=None, types=None):
+    """
+    Transform pandas.DataFrame into torch.Tensors based on columns
+    If columns is None, new Tensor will be created for each column in df
+    """
+    _tensors = []
+
+    if cols is None:
+        for col in df.columns:
+            cur = df[col].values
+            cur = torch.IntTensor(cur)
+            _tensors.append(cur)
+
+    else:
+        for it, type_ in zip(cols, types):
+            cur = df[it].values
+            if type_ == "int":
+                cur = torch.IntTensor(cur)
+            else:
+                cur = torch.Tensor(cur)
+            _tensors.append(cur)
+
+    return _tensors
 
 
 #######################################################

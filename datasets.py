@@ -5,9 +5,6 @@ import pandas as pd
 import utils
 
 
-#######################################################
-#              For pairwise ranking                   #
-#######################################################
 class DatasetWithNegativeSampling(Dataset):
     """
     We create new Dataset class because for pairwise ranking loss, an important step is negative sampling.
@@ -159,10 +156,20 @@ class DatasetWithNegativeSampling(Dataset):
             return user_id, item_id, is_pos
 
 
-#######################################################
-#              For pairwise ranking                   #
-#######################################################
 class ImplicitFeedbackDataset(Dataset):
+    def __init__(self, user_item_tensor, target_tensor):
+        super(ImplicitFeedbackDataset, self).__init__()
+        self.user_item_tensor = user_item_tensor
+        self.target_tensor = target_tensor
+
+    def __len__(self):
+        return len(self.user_item_tensor)
+
+    def __getitem__(self, index):
+        return self.user_item_tensor[index], self.target_tensor[index]
+
+
+class SetupImplicitDataset:
     """
     Almost always recommendation systems are built based on implicit feedback .
     One way to construct such data is to use items users interacted with as positive examples
@@ -174,14 +181,12 @@ class ImplicitFeedbackDataset(Dataset):
     So we normalize explicit feedback (ratings) and binarize implicit
     """
     def __init__(self, df, user_col="user_id", item_col="item_id", target_col="rating"):
-        super(ImplicitFeedbackDataset, self).__init__()
         self.df = df
         self.user_col = user_col
         self.item_col = item_col
         self.target_col = target_col
         self.all_users = set(self.df[self.user_col].unique())
         self.all_items = set(self.df[self.item_col].unique())
-        # self.
 
     def binarize_implicit(self, df, num_negatives):
         interacted_items = df.groupby(self.user_col)[self.item_col].unique().to_dict()
@@ -208,44 +213,48 @@ class ImplicitFeedbackDataset(Dataset):
         # Drop auxiliary columns
         new_df = new_df.drop(["pos_items", "neg_items", "pos_flag", "neg_flag"], axis=1)
         new_df = new_df.explode([self.item_col, self.target_col])
+        # Cast all columns to float32
+        for col in new_df.columns:
+            new_df[col] = new_df[col].astype("int32")
 
         return new_df
 
     def normalize_explicit(self):
         """Normalize rating values into [0; 1] from [0; max_rating]"""
-        max_rating = max(self.df[self.target_col])
-        self.df[self.target_col] = self.df[self.target_col] / max_rating
+        new_df = self.df.copy()
+        max_rating = max(new_df[self.target_col])
+        new_df[self.target_col] = new_df[self.target_col] / max_rating
+        return new_df[[self.user_col, self.item_col, self.target_col]]
 
-    def setup(self, feedback_type="implicit", num_negatives=100, shuffle=True, train_size=None, validation_df=False):
-        # Split the data
-        if validation_df:
-            train_df, val_df, test_df = utils.split_data(self.df, shuffle, train_size, validation_df)
-        else:
-            train_df, test_df = utils.split_data(self.df, shuffle, train_size, validation_df)
-
+    def setup(self, feedback_type="implicit", num_negatives=100, shuffle=True, train_size=None,
+              validation_df=False, as_torch_tensor=True):
         if feedback_type == "implicit":
-            self.binarize_implicit()
-            user_ids = train_df[self.user_col].unique()
-
-            train_ = train_df.groupby(self.user_col, as_index=False)
+            new_df = self.binarize_implicit(self.df, num_negatives)
         elif feedback_type == "explicit":
-            self.normalize_explicit()
+            new_df = self.normalize_explicit()
         else:
             raise ValueError(f"feedback_type should be one of 'implicit', 'explicit', got {feedback_type}")
 
-    def __len__(self):
-        pass
+        # Split the data
+        if validation_df:
+            train_df, val_df, test_df = utils.split_data(new_df, shuffle, train_size, validation_df)
 
-    def __getitem__(self, item):
-        pass
+            if as_torch_tensor:
+                _cols = [[self.user_col, self.item_col], self.target_col]
+                train_tensor = utils.torch_from_pandas(train_df, cols=_cols)
+                val_tensor = utils.torch_from_pandas(val_df, cols=_cols)
+                test_tensor = utils.torch_from_pandas(test_df, cols=_cols)
+                return train_tensor, val_tensor, test_tensor
 
+            return train_df, val_df, test_df
 
-if __name__ == '__main__':
-    torch.manual_seed(42)
+        else:
+            train_df, test_df = utils.split_data(new_df, shuffle, train_size, validation_df)
+            if as_torch_tensor:
+                _cols = [[self.user_col, self.item_col], self.target_col]
+                _types = ["int", "float"]
+                train_tensor = utils.torch_from_pandas(train_df, cols=_cols, types=_types)
+                test_tensor = utils.torch_from_pandas(test_df, cols=_cols, types=_types)
+                return train_tensor, test_tensor
 
-    dataset, users_cnt, items_cnt = utils.load_dataset("ml_small")
-
-    im = ImplicitFeedbackDataset(dataset)
-    r = im.binarize_implicit(dataset, 5)
-    print(r)
-    print(r.shape)
+            return train_df, test_df
